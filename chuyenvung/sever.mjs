@@ -1,49 +1,61 @@
+// server.mjs — safe startup, health always works
 import express from "express";
-import fetch from "node-fetch";
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 
+/* ---------- CORS ---------- */
 const ORIGINS = (process.env.ALLOWED_ORIGINS || "*")
   .split(",").map(s => s.trim());
 
 app.use((req, res, next) => {
   const origin = req.headers.origin || "*";
-  const allowOrigin = ORIGINS.includes("*") || ORIGINS.includes(origin)
-    ? origin : ORIGINS[0] || "*";
+  const allowOrigin =
+    ORIGINS.includes("*") || ORIGINS.includes(origin) ? origin : (ORIGINS[0] || "*");
+
   res.setHeader("Access-Control-Allow-Origin", allowOrigin);
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "content-type, authorization, x-relay-key");
+  res.setHeader("Access-Control-Allow-Headers",
+    "content-type, authorization, x-relay-key");
   if (req.method === "OPTIONS") return res.status(204).end();
   next();
 });
 
-const MUST = (k) => {
-  const v = process.env[k];
-  if (!v) throw new Error(`Missing env ${k}`);
-  return v;
-};
+/* ---------- Routes cơ bản ---------- */
+app.get("/", (req, res) => {
+  res.type("text/plain").send("openai-relay is running");
+});
 
-const OPENAI_API_KEY = MUST("OPENAI_API_KEY");
-const RELAY_KEY = MUST("RELAY_KEY");
+app.get("/health", (req, res) => {
+  // Không phụ thuộc ENV → luôn trả về OK nếu server up
+  res.json({ ok: true, uptime: process.uptime() });
+});
+
+/* ---------- ENV (đọc mềm, không crash khi thiếu) ---------- */
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
+const RELAY_KEY = process.env.RELAY_KEY || "";
 const MODEL_DEFAULT = process.env.MODEL_DEFAULT || "gpt-4o-mini";
 const TIMEOUT_AI = +(process.env.TIMEOUT_AI || 25000);
 
-app.get("/health", (req, res) => res.json({ ok: true }));
-
+/* ---------- API relay ví dụ ---------- */
 app.post("/api/ai-faq", async (req, res) => {
   try {
-    if ((req.headers["x-relay-key"] || "") !== RELAY_KEY) {
+    if (!RELAY_KEY || (req.headers["x-relay-key"] || "") !== RELAY_KEY) {
       return res.status(401).json({ error: "Unauthorized" });
     }
+    if (!OPENAI_API_KEY) {
+      return res.status(500).json({ error: "Missing OPENAI_API_KEY" });
+    }
+
     const { question, model } = req.body || {};
     const usedModel = model || MODEL_DEFAULT;
 
+    // Node 18+ có sẵn fetch
     const r = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${OPENAI_API_KEY}`,
+        "content-type": "application/json",
+        "authorization": `Bearer ${OPENAI_API_KEY}`,
       },
       body: JSON.stringify({
         model: usedModel,
@@ -51,17 +63,18 @@ app.post("/api/ai-faq", async (req, res) => {
           { role: "system", content: "You are a concise, helpful cybersecurity assistant for anti-scam FAQs." },
           { role: "user", content: question || "Hướng dẫn an toàn tài khoản ngân hàng?" }
         ],
-        temperature: 0.3
+        temperature: 0.2,
       }),
-      timeout: TIMEOUT_AI
+      signal: AbortSignal.timeout(TIMEOUT_AI)
     });
 
-    const data = await r.json();
+    const data = await r.json().catch(() => ({}));
     res.status(r.ok ? 200 : r.status).json(data);
   } catch (e) {
-    res.status(500).json({ error: e.message || String(e) });
+    res.status(500).json({ error: e?.message || String(e) });
   }
 });
 
+/* ---------- Start ---------- */
 const PORT = process.env.PORT || 7860;
 app.listen(PORT, () => console.log(`Relay listening on ${PORT}`));
