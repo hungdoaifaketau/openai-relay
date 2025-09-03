@@ -4,18 +4,61 @@ import express from "express";
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 
-/* ---------- CORS ---------- */
-const ORIGINS = (process.env.ALLOWED_ORIGINS || "*").split(",").map(s => s.trim());
-app.use((req, res, next) => {
-  const origin = req.headers.origin || "*";
-  const allowOrigin =
-    ORIGINS.includes("*") || ORIGINS.includes(origin) ? origin : (ORIGINS[0] || "*");
+/* ---------- CORS (đặt TRƯỚC MỌI ROUTE) ---------- */
+// Lấy danh sách origin hợp lệ từ ENV (phân tách bằng dấu phẩy)
+const ORIGINS = (process.env.ALLOWED_ORIGINS || "*")
+  .split(",")
+  .map(s => s.trim())
+  .filter(Boolean);
 
-  res.setHeader("Access-Control-Allow-Origin", allowOrigin);
+// Middleware CORS dùng cho mọi request
+app.use((req, res, next) => {
+  const origin = req.headers.origin || "";
+  const allowed = ORIGINS.includes("*") || ORIGINS.includes(origin);
+
+  // Để proxy/CDN cache theo Origin
+  res.setHeader("Vary", "Origin");
+
+  if (allowed) {
+    // Trả đúng origin gọi tới (an toàn hơn '*')
+    res.setHeader("Access-Control-Allow-Origin", origin || "*");
+  }
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "content-type, authorization, x-relay-key");
-  if (req.method === "OPTIONS") return res.status(204).end();
+  res.setHeader("Access-Control-Max-Age", "86400"); // cache preflight 1 ngày
+
+  // Preflight: nếu origin không được phép thì trả 403; nếu được phép thì 204
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(allowed ? 204 : 403);
+  }
+
+  // Với request thật mà origin không hợp lệ -> chặn luôn (tránh request rơi vào route)
+  if (origin && !allowed) {
+    return res.status(403).json({ error: "CORS origin not allowed" });
+  }
+
   next();
+});
+
+/* ---------- Friendly endpoints cho người mở trực tiếp ---------- */
+app.get("/api/chat", (req, res) => {
+  res.status(405).json({
+    ok: true,
+    note: "Use POST with JSON and X-Relay-Key",
+    example: {
+      url: "/api/chat",
+      method: "POST",
+      headers: { "content-type": "application/json", "X-Relay-Key": "<your-relay-key>" },
+      body: {
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", "content": "You are a helpful assistant." },
+          { role: "user", "content": "phishing là gì?" }
+        ],
+        temperature: 0.2
+      }
+    }
+  });
 });
 
 /* ---------- Base routes ---------- */
@@ -30,6 +73,7 @@ const TIMEOUT_AI     = +(process.env.TIMEOUT_AI || 25000);
 
 /* ---------- Helpers ---------- */
 function ensureAuth(req, res) {
+  // Chỉ kiểm tra key cho request thật (không kiểm tra trên OPTIONS vì đã return ở middleware)
   if (!RELAY_KEY || (req.headers["x-relay-key"] || "") !== RELAY_KEY) {
     res.status(401).json({ error: "Unauthorized" });
     return false;
@@ -41,7 +85,7 @@ function ensureAuth(req, res) {
   return true;
 }
 
-/* ---------- Demo FAQ (giữ lại cho bạn đang dùng) ---------- */
+/* ---------- Demo FAQ ---------- */
 app.post("/api/ai-faq", async (req, res) => {
   try {
     if (!ensureAuth(req, res)) return;
@@ -73,7 +117,7 @@ app.post("/api/ai-faq", async (req, res) => {
   }
 });
 
-/* ---------- NEW: /api/chat (giống Chat Completions, non-stream) ---------- */
+/* ---------- /api/chat (Chat Completions, non-stream) ---------- */
 app.post("/api/chat", async (req, res) => {
   try {
     if (!ensureAuth(req, res)) return;
@@ -110,7 +154,6 @@ app.post("/api/chat", async (req, res) => {
       signal: AbortSignal.timeout(TIMEOUT_AI)
     });
 
-    // Trả nguyên định dạng OpenAI cho dễ tích hợp
     const data = await r.json().catch(() => ({}));
     res.status(r.ok ? 200 : r.status).json(data);
   } catch (e) {
@@ -121,27 +164,3 @@ app.post("/api/chat", async (req, res) => {
 /* ---------- Start ---------- */
 const PORT = process.env.PORT || 7860;
 app.listen(PORT, () => console.log(`Relay listening on ${PORT}`));
-// Cho preflight CORS trả về ngay
-app.options("/api/chat", (req, res) => res.sendStatus(204));
-
-// Mô tả cách dùng khi ai đó mở GET trên trình duyệt
-app.get("/api/chat", (req, res) => {
-  res.status(405).json({
-    ok: true,
-    note: "Use POST with JSON and X-Relay-Key",
-    example: {
-      url: "/api/chat",
-      method: "POST",
-      headers: { "content-type": "application/json", "X-Relay-Key": "<your-relay-key>" },
-      body: {
-        model: "gpt-4o-mini",
-        messages: [
-          { role: "system", "content": "You are a helpful assistant." },
-          { role: "user", "content": "phishing là gì?" }
-        ],
-        temperature: 0.2
-      }
-    }
-  });
-});
-
