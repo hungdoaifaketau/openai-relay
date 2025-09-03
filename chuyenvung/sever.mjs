@@ -121,3 +121,27 @@ app.post("/api/chat", async (req, res) => {
 /* ---------- Start ---------- */
 const PORT = process.env.PORT || 7860;
 app.listen(PORT, () => console.log(`Relay listening on ${PORT}`));
+// Cho preflight CORS trả về ngay
+app.options("/api/chat", (req, res) => res.sendStatus(204));
+
+// Mô tả cách dùng khi ai đó mở GET trên trình duyệt
+app.get("/api/chat", (req, res) => {
+  res.status(405).json({
+    ok: true,
+    note: "Use POST with JSON and X-Relay-Key",
+    example: {
+      url: "/api/chat",
+      method: "POST",
+      headers: { "content-type": "application/json", "X-Relay-Key": "<your-relay-key>" },
+      body: {
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", "content": "You are a helpful assistant." },
+          { role: "user", "content": "phishing là gì?" }
+        ],
+        temperature: 0.2
+      }
+    }
+  });
+});
+
