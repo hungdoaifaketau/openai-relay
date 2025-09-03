@@ -1,13 +1,14 @@
 {
   "name": "openai-relay",
   "version": "1.0.0",
-  "private": true,
   "type": "module",
-  "scripts": {
-    "start": "node server.mjs"
-  },
+  "private": true,
   "engines": {
-    "node": ">=18"
+    "node": "20.x"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "NODE_ENV=development node server.mjs"
   },
   "dependencies": {
     "express": "^4.19.2"
